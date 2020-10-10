@@ -12,15 +12,14 @@ ThisBuild / scalaVersion := scala2_13
 ThisBuild / version := libVersion
 
 
-val common = (project in file("common"))
+val common = Project("fsm4s-core", file("common"))
   .settings(
   	Common.settings,
     libraryDependencies ++=
       odin ++ circe ++ postgres ++ doobie
   )
 
-val docs = project
-  .in(file("docs-build"))
+val docs = Project("fsm4s-docs", file("docs-build"))
   .dependsOn(common)
   .enablePlugins(MdocPlugin)
 

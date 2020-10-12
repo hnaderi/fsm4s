@@ -6,7 +6,7 @@ sealed trait FSMApp {
   type Event
   type Log
 
-  def transition: Transition[State, Event]
+  def transition: (State, Event) => State
   def decide: Decider[State, Command, Log, Event]
 }
 
@@ -18,14 +18,14 @@ object FSMApp {
     type Log = L
   }
 
-  def apply[S, E, C, L](t: Transition[S, E], d: Decider[S, C, L, E]): Aux[S, E, C, L] =
+  def apply[S, E, C, L](t: (S, E)=> S, d: Decider[S, C, L, E]): Aux[S, E, C, L] =
     new FSMApp {
       type State = S
       type Event = E
       type Command = C
       type Log = L
 
-      def transition: Transition[S, E] = t
+      def transition: (S, E) => S = t
       def decide: Decider[S, C, L, E] = d
     }
 }

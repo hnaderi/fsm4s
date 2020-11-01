@@ -18,7 +18,10 @@ object FSMApp {
     type Log = L
   }
 
-  def apply[S, E, C, L](t: (S, E)=> S, d: Decider[S, C, L, E]): Aux[S, E, C, L] =
+  def apply[S, E, C, L](
+      t: (S, E) => S,
+      d: Decider[S, C, L, E]
+  ): Aux[S, E, C, L] =
     new FSMApp {
       type State = S
       type Event = E

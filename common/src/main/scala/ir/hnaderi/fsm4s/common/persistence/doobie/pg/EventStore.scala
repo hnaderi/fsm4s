@@ -41,7 +41,7 @@ object EventStore {
       val timeIndex = Helpers.timeIndexNameFor(name)
 
       sql"""
-      create table if not exist ${Helpers.tableFor(name)} (
+      create table if not exists ${Helpers.tableFor(name)} (
        seqnr bigserial primary key,
        "time" timestamptz NOT NULL,
        "event" jsonb NOT NULL

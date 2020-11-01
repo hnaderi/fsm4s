@@ -7,9 +7,10 @@ import doobie.implicits._
 import ir.hnaderi.fsm4s.common._
 import io.circe.Codec
 import ir.hnaderi.fsm4s.common.persistence.EventSourcedBackend
+import scala.reflect.runtime.universe.TypeTag
 
 object Backend {
-  def eventSourced[F[_]: Sync, S: Codec, E: Codec, I: Meta](
+  def eventSourced[F[_]: Sync, S: Codec : TypeTag, E: Codec, I: Meta](
       name: StoreName
   )(
       trx: Transactor[F]
@@ -17,5 +18,6 @@ object Backend {
     for {
       publisher <- EventStore.setupPublisher[E](name).transact(trx)
       idempStore <- IdempotencyStore.applySetup[I](name).transact(trx)
-    } yield new EventSourcedBackend(trx, publisher, ???, idempStore, ???)
+      snapshotRepo <- SnapshotStore.setupApply[S].transact(trx)
+    } yield new EventSourcedBackend(trx, publisher, idempStore, snapshotRepo)
 }

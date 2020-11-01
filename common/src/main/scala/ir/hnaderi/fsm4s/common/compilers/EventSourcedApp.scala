@@ -32,7 +32,7 @@ object EventSourcedApp {
   )(
       storage: EventSourcedStorage[F, S, E, I],
       logger: Logger[F]
-  ): F[FSM[F, S, (I, M), E]] =
+  ): F[FSM[F, S, (I, M), ValidatedNec[String, NonEmptyList[E]]]] =
     for {
       last <- storage.loadSnapshot
       (initialVersion, initialState) <- last match {
@@ -49,13 +49,14 @@ object EventSourcedApp {
       state <- SignallingRef[F, CommandHandlerState[S, I]](
         CommandHandlerState(initialVersion, initialState, ???)
       )
-    } yield new FSM[F, S, (I, M), E] {
+    } yield new FSM[F, S, (I, M), ValidatedNec[String, NonEmptyList[E]]] {
 
       import Stream._
 
       override def updates: Stream[F, S] = state.discrete.map(_.lastState)
 
-      override def input: Pipe[F, (I, M), ValidatedNec[String, NonEmptyList[E]]] =
+      override def input
+          : Pipe[F, (I, M), ValidatedNec[String, NonEmptyList[E]]] =
         commands =>
           for {
             (id, cmd) <- commands
@@ -65,9 +66,13 @@ object EventSourcedApp {
             _ <- idempotencyCheck(processedIds, id)
             decision = app.decide(currentState, cmd)
             _ <- decision match {
-	            case Invalid(reasons) =>
-                eval(logger.debug(s"rejected command due to: ${reasons.mkString_("\n")}"))
-	            case Valid(events) =>
+              case Invalid(reasons) =>
+                eval(
+                  logger.debug(
+                    s"rejected command due to: ${reasons.mkString_("\n")}"
+                  )
+                )
+              case Valid(events) =>
                 val newState = events.foldLeft(currentState)(app.transition)
                 eval {
                   DateTime.now[F] >>=

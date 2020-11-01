@@ -41,12 +41,12 @@ object IdempotencyStore {
       val tableName = Helpers.tableNameFor(name)
       val seqIndex = Helpers.indexNameFor(name)
       sql"""
-      create table $tableName (
+      create table if not exists $tableName (
         seqnr bigserial primary key,
         value varchar   not null
-      )
+      );
 
-      create index if not exists $seqIndex  ON $tableName (seqnr, DESC);
+      create index if not exists $seqIndex  ON $tableName (seqnr DESC);
       """.update
     }
     def append[T: Put](name: StoreName, t: T): Update0 = sql"""

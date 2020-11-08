@@ -28,8 +28,7 @@ object Common {
   )
 
   val settings = Seq(
-    organization := "info.particleb",
-    organizationName := "particleb",
+    organization := "ir.hnaderi",
     scalacOptions ++= commonScalacOptions,
     wartremoverErrors ++= Warts
       .allBut(Wart.Nothing, Wart.Any, Wart.Overloading),

@@ -40,22 +40,24 @@ object SnapshotStore {
     Queries.setup.run.void
 
   import scala.reflect.runtime.universe.TypeTag
-  def setupApply[T: Codec : TypeTag]: ConnectionIO[SnapshotRepository[ConnectionIO, T]] =
-    setup.as(apply[T])
+  def setupApply[I: Put, T: Codec: TypeTag]
+      : ConnectionIO[SnapshotRepository[ConnectionIO, I, T]] =
+    setup.as(apply[I, T])
 
-  def apply[T: Codec: TypeTag]: SnapshotRepository[ConnectionIO, T] =
-    new SnapshotRepository[ConnectionIO, T] {
+  def apply[I: Put, T: Codec: TypeTag]: SnapshotRepository[ConnectionIO, I, T] =
+    new SnapshotRepository[ConnectionIO, I, T] {
       implicit val get: Get[T] = jsonDataGet[T]
       implicit val put: Put[T] = jsonPut.contramap(Encoder[T].apply)
 
       override def save(
+          id: I,
           oldVersion: Long,
           newVersion: Long,
           t: T
       ): ConnectionIO[Boolean] =
         Queries.save(oldVersion, newVersion, t).run.map(_ === 1)
 
-      override def load: ConnectionIO[Option[SnapshotData[T]]] =
+      override def load(id: I): ConnectionIO[Option[SnapshotData[T]]] =
         Queries.load[T].option
 
     }

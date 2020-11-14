@@ -20,7 +20,6 @@ import fs2.concurrent.Queue
 import cats.effect.Sync
 import cats.effect.Timer
 import cats.Show
-import ir.hnaderi.fsm4s.common.persistence.pg.Backend
 import cats.effect.IO
 
 object TTT {
@@ -76,16 +75,6 @@ object TTT {
 
   private val app = CommandHandler[IO].from(decider)(backend)
 
-  val eventConsumer: EventConsumer[IO, Id, MyEvents] = ???
-
-  def mqPublish(id: Id, event: MyEvents): IO[Unit] = ???
-
-  val publisher: Stream[IO, Unit] = for {
-    (offset, id, event) <- eventConsumer.messages
-    _ <- Stream.eval(mqPublish(id, event))
-    _ <- Stream.eval(eventConsumer.commit(offset))
-  } yield ()
-
   val consumer: Stream[IO, (Id, MyEvents)] = ???
 
   val subApp: CommandHandler[IO, ClientId, Id, Int, String] =
@@ -117,7 +106,6 @@ object TTT {
 
   val program: Stream[IO, Unit] =
     process1 concurrently
-      publisher concurrently
       commandHandler
 
 }

@@ -10,7 +10,6 @@ import scala.reflect.runtime.universe.TypeTag
 import cats.data.NonEmptyChain
 import ir.hnaderi.fsm4s.eventsourcing._
 import fs2.Stream
-import fs2.Pull
 import fs2.Pipe
 import cats.data.Validated.Invalid
 import cats.data.Validated.Valid
@@ -18,6 +17,12 @@ import cats.effect.Clock
 import cats.effect.Resource
 import cats.effect.Concurrent
 import Resource._
+import io.circe.Decoder
+import cats.effect.Timer
+import cats.arrow.FunctionK
+import cats.effect.LiftIO
+import scala.concurrent.duration.FiniteDuration
+import cats.effect.Effect
 
 object Backend {
   def eventsourced[
@@ -47,71 +52,35 @@ object Backend {
       trx
     )
   }
-}
 
-final class PGEventSourcedBackend[F[_]: Sync: Clock, STATE, EVENT, ID, CmdID](
-    transitor: Transitor[STATE, EVENT, Throwable],
-    pub: EventSourcedJournal[ConnectionIO, ID, EVENT],
-    cmdIdStore: IdempotencyStore[ConnectionIO, CmdID],
-    // snapshot: SnapshotRepository[ConnectionIO, ID, STATE],
-    trx: Transactor[F]
-) extends EventSourcedBackend2[
-      F,
-      STATE,
-      EVENT,
-      ID,
-      CmdID
-    ] {
-  def read(id: ID): F[(Int, Option[STATE])] =
-    for {
-      // lastSnapshot <- snapshot.load(id).transact(trx)
-      // FIXME: add real snapshot mechanism!
-      lastSnapshot <- Option.empty[SnapshotData[STATE]].pure[F]
-      lastState = lastSnapshot.map(_.data)
-      lastVersion = lastSnapshot.map(_.version.toInt).getOrElse(0)
-      hydrated <-
-        pub
-          .read(id)
-          .through(rehydrate(lastVersion, lastState))
-          .compile
-          .last
-          .transact(trx)
-      out = hydrated match {
-        case Some((version, state)) => (version, state.some)
-        case None                   => (0, None)
-      }
-    } yield out
-
-  def history(id: ID): Stream[F, (Int, STATE)] =
-    pub.read(id).through(rehydrate(0, None)).transact(trx)
-
-  private def rehydrate[M[_]: Sync](
-      initialVersion: Int,
-      initialState: Option[STATE]
-  ): Pipe[M, EventMessage[EVENT], (Int, STATE)] =
-    _.evalScan((initialVersion, initialState)) {
-      case ((version, state), msg) =>
-        transitor(state, msg.payload) match {
-          case Left(failure)    => Sync[M].raiseError(failure)
-          case Right(nextState) => (version + 1, nextState.some).pure[M]
-        }
-    }.collect {
-      case (version, Some(state)) => (version, state)
+  import cats.effect.implicits._
+  import cats.~>
+  private def fK[F[_]: Effect]: FunctionK[F, ConnectionIO] =
+    new (F ~> ConnectionIO) {
+      def apply[A](fa: F[A]): doobie.ConnectionIO[A] = fa.toIO.to[ConnectionIO]
     }
 
-  def accept(
-      version: Int,
-      aggId: ID,
-      events: NonEmptyChain[EVENT],
-      refCmd: CmdID
-  ): F[Boolean] =
+  private def timer[F[_]: Effect: Timer]: Timer[ConnectionIO] =
+    Timer[F].mapK(fK[F])
+
+  def consumer[F[
+      _
+  ]: Effect: Timer: LiftIO, ID: IdCodec: TypeTag, EVENT: Decoder: TypeTag](
+      name: StoreName,
+      config: ConsumerConfig
+  )(trx: Transactor[F]): F[EventStoreConsumer[F, ID, EVENT]] = {
+    implicit val timerInst: Timer[ConnectionIO] = timer
     for {
-      now <- DateTime.now[F]
-      persisted <- (
-          pub.append(version, now, aggId, events) >>
-            cmdIdStore
-              .append(refCmd)
-              .ifM(FC.pure(true), FC.rollback.as(false))
-      ).transact(trx)
-    } yield persisted
+      _ <- EventStore.setupConsumers.transact(trx)
+      logger = io.odin.consoleLogger[ConnectionIO]()
+      m = Messaging(timerInst)
+      c = EventStore.consumer(name, config.name, m, config.pollInterval, logger)
+    } yield new PGEventConsumer[F, ID, EVENT](c, trx)
+  }
+
+  final case class ConsumerConfig(
+      name: ConsumerName,
+      pollInterval: FiniteDuration
+  )
+
 }

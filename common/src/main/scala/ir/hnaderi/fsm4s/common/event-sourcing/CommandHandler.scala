@@ -2,7 +2,6 @@ package ir.hnaderi.fsm4s
 package eventsourcing
 
 import ir.hnaderi.fsm4s.common._
-import ir.hnaderi.fsm4s.data._
 
 import cats.implicits._
 import cats.data.Validated.Invalid

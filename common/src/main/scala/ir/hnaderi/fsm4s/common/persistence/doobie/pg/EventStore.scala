@@ -23,6 +23,7 @@ import doobie.refined.implicits._
 import scala.reflect.runtime.universe.TypeTag
 import io.circe.Codec
 import cats.MonadError
+import scala.annotation.tailrec
 
 object EventStore {
   private object Helpers {
@@ -75,11 +76,10 @@ object EventStore {
     }
 
     def setupConsumers: Update0 = sql"""
-    create table if not exist ${Helpers.consumersTable} (
-     "name" varchar NOT NULL,
+    create table if not exists ${Helpers.consumersTable} (
+     "name" varchar NOT NULL primary key,
       seqnr bigint NOT NULL
     );
-    create unique index if not exists consumers_name_idx ON ${Helpers.consumersTable} ("name");
     """.update
 
     def append[I: Put, T: Put](
@@ -127,11 +127,12 @@ object EventStore {
       """.update
     }
 
-    def commit(name: ConsumerName, id: Long): Update0 =
+    def commit(name: ConsumerName, seqnr: Long): Update0 =
       sql"""
-      update ${Helpers.consumersTable}
-      set id = $id
-      where name = $name
+      insert into ${Helpers.consumersTable} (name, seqnr)
+      values ($name, $seqnr)
+      on conflict (name) do
+      update set seqnr = $seqnr
       """.update
 
     def queryAfterForId[I: Put, T: Get](
@@ -164,7 +165,22 @@ object EventStore {
       select seqnr, version, time, id, event
       from ${Helpers.tableFor(name)}
       where seqnr > $seqNr
+      order by seqnr
       """.query[ConsumedEvent[I, T]]
+
+    def queryAllUntil[I: Get, T: Get](
+        name: StoreName,
+        until: Long
+    ): Query0[ConsumedEvent[I, T]] =
+      sql"""
+      select seqnr, version, time, id, event
+      from ${Helpers.tableFor(name)}
+      where seqNr <= $until
+      order by seqnr
+      """.query[ConsumedEvent[I, T]]
+
+    def getLatestSeqNr(name: StoreName): Query0[Long] =
+      sql"select max(seqnr) from ${Helpers.tableFor(name)}".query[Long]
 
     def lastConsumerState(name: ConsumerName): Query0[Long] =
       sql"select seqnr from ${Helpers.consumersTable} where name=$name"
@@ -235,13 +251,33 @@ object EventStore {
       import Stream._
       override def messages: Stream[ConnectionIO, ConsumedEvent[I, T]] =
         for {
+          lastSeqNr <- waitForLastOffestToBecomeAvailable
           _ <- eval(logger.debug("loading last state..."))
-          initialState <- eval(getLastState)
-          _ <- eval(
-            logger
-              .debug(s"loaded last state! sequence nr. ${initialState.show}")
-          )
+          lastState <- eval(getLastState)
+          event <- lastState match {
+            case Some(initialState) =>
+              continue(initialState)
+            case None =>
+              allUntil(lastSeqNr) ++ continue(lastSeqNr)
+          }
+        } yield event
+
+      private def continue(
+          initialState: Long
+      ): Stream[ConnectionIO, ConsumedEvent[I, T]] =
+        for {
           state <- eval(Ref.of[ConnectionIO, Long](initialState))
+          lastState <- repeatEval(state.get)
+          _ <- eval(
+            logger.info(s"continuing to consume from ${lastState.show} ...")
+          )
+          event <- allAfter(lastState) ++ waitForNotification.drain
+          _ <- eval(state.set(event.seqNr))
+        } yield event
+
+      private def waitForNotification: Stream[ConnectionIO, Unit] =
+        for {
+          _ <- eval(logger.info(s"waiting for notifcation ..."))
           ns <- messaging.batchedNotifications(
             Helpers.channelNameFor(source),
             pollInterval
@@ -249,14 +285,22 @@ object EventStore {
           _ <- eval(
             logger.debug(s"received ${ns.size.show} update notification(s)!")
           )
-          lastState <- eval(state.get)
-          event <- allAfter(lastState)
-          _ <- eval(logger.debug(s"received event ${event.seqNr.show}!"))
-          _ <- eval(state.set(event.seqNr))
-        } yield event
+        } yield ()
 
-      private def getLastState: ConnectionIO[Long] =
-        Queries.lastConsumerState(name).unique
+      private def getLastState: ConnectionIO[Option[Long]] =
+        Queries.lastConsumerState(name).option
+
+      private def allUntil(
+          seqNr: Long
+      ): Stream[ConnectionIO, ConsumedEvent[I, T]] =
+        Queries.queryAllUntil[I, T](source, seqNr).stream
+
+      private def getLastOffset: ConnectionIO[Option[Long]] =
+        Queries.getLatestSeqNr(source).option
+
+      private def waitForLastOffestToBecomeAvailable
+          : Stream[ConnectionIO, Long] =
+        repeatEval(getLastOffset).untilDefinedM
 
       override def allAfter(
           seqNr: Long
@@ -271,6 +315,8 @@ object EventStore {
       name: StoreName
   ): ConnectionIO[EventSourcedJournal[ConnectionIO, I, T]] =
     Queries.setupJournal(name).run.as(publisher(name))
+
+  def setupConsumers: ConnectionIO[Unit] = Queries.setupConsumers.run.void
 
   sealed trait Errors extends Throwable
   object Errors {

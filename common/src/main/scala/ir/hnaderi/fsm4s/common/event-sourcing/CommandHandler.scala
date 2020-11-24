@@ -32,13 +32,13 @@ object CommandHandler {
 
   final class EDFSMAppBuilder[F[_]: Sync](logger: Logger[F]) {
 
-    def from[STATE, ID: Show, CMD, REJ: Show, EVENT](
+    def from[STATE, ID: Show, CMD, CmdId: Show, REJ: Show, EVENT](
         decider: Decider[STATE, CMD, REJ, EVENT]
     )(
-        backend: EventSourcedBackend2[F, STATE, EVENT, ID, String]
-    ): CommandHandler[F, String, ID, CMD, REJ] = {
-      def handler: CommandHandler[F, String, ID, CMD, REJ] =
-        (cmdId: String, id: ID, cmd: CMD) =>
+        backend: EventSourcedBackend2[F, STATE, EVENT, ID, CmdId]
+    ): CommandHandler[F, CmdId, ID, CMD, REJ] = {
+      def handler: CommandHandler[F, CmdId, ID, CMD, REJ] =
+        (cmdId: CmdId, id: ID, cmd: CMD) =>
           for {
             (version, state) <- backend.read(id)
             decision = decider(state, cmd)
@@ -46,7 +46,7 @@ object CommandHandler {
               case Invalid(errs) =>
                 logger
                   .info(
-                    s"Command rejected! [client id: $cmdId, aggregate id: ${id.show}]"
+                    s"Command rejected! [client id: ${cmdId.show}, aggregate id: ${id.show}]"
                   )
                   .as(errs.invalid)
               case Valid(a) =>
